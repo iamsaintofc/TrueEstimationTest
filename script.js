@@ -2386,83 +2386,187 @@ window.ecoOpenCase = async function(caseId) {
       : m.includes('banned') ? 'Аккаунт заблокирован' : 'Ошибка: ' + m, 'error');
   }
   await loadEconomy();
-  ecoAnimate(data, cs);
+  ecoOpenPackScene(data, cs);
 };
 
-function ecoRollPreview() {
-  const x = Math.random() * 100;
-  const rar = x < 1 ? 'mythic' : x < 5 ? 'legendary' : x < 15 ? 'epic' : x < 40 ? 'rare' : 'common';
-  const pool = ecoCards.filter(c => c.rarity === rar);
-  const src = pool.length ? pool : ecoCards;
-  return src[Math.floor(Math.random() * src.length)];
-}
+// ---------- ФИЗИЧЕСКОЕ ВСКРЫТИЕ ПАКА (vanilla-версия pack-opening.jsx) ----------
+// Сценарий: idle (парение+покачивание) → клик (зум) → отрыв края + вспышка
+//           → вылет карточки → переворот (авто или клик) → панель результата
+let packPhase = 'idle', packResult = null, packCase = null;
+let packZoomTimer = null, packBurstTimer = null, packFlipTimer = null;
 
-function ecoAnimate(res, cs) {
-  const modal = eco$('case-modal');
-  if (!modal) return;
-  modal.classList.remove('hidden'); modal.classList.add('flex');
-  const strip = eco$('case-strip'), resultEl = eco$('case-result');
-  resultEl.classList.add('hidden'); resultEl.classList.remove('flex');
-  strip.style.transition = 'none'; strip.style.transform = 'translateX(0px)';
-
-  const winIdx = 35, total = 42;
-  let html = '';
-  for (let i = 0; i < total; i++) {
-    const c = i === winIdx ? res.card : ecoRollPreview();
-    const r = ECO_RARITY[c.rarity];
-    html += `<div class="case-tile rounded-xl border ${c.rarity === 'mythic' ? 'mythic-anim border-cyan-200/70' : 'border-white/15'} bg-white/5 overflow-hidden relative flex-shrink-0">
-      ${ecoCardImg(c, 'w-full h-full')}
-      <div class="absolute top-1 left-1 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-black/70" style="color:${r.color}">${r.label}</div>
-      ${ecoCardRarityBar(c.rarity)}
-    </div>`;
+// SVG-пак с зубчатым отрывным краем: только градиенты, без картинок
+function packGraphicSvg(name, price, boost) {
+  const teeth = 12, w = 300, h = 46, tw = w / teeth;
+  let d = `M 0 0 L ${w} 0 L ${w} ${h - tw * 0.6}`;
+  for (let i = teeth; i >= 1; i--) {
+    const x = i * tw;
+    d += ` L ${x - tw / 2} ${h} L ${x - tw} ${h - tw * 0.6}`;
   }
-  strip.innerHTML = html;
-  const win = strip.children[winIdx];
-  const offset = win.offsetLeft + win.offsetWidth / 2 - strip.parentElement.clientWidth / 2;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    strip.style.transition = 'transform 4.6s cubic-bezier(0.16, 0.84, 0.24, 1)';
-    strip.style.transform = `translateX(${-offset}px)`;
-  }));
-  if (ecoAnimTimer) clearTimeout(ecoAnimTimer);
-  ecoAnimTimer = setTimeout(() => ecoShowResult(res, cs), 4800);
+  d += ' Z';
+  const safeName = escapeHtml(String(name || 'Ледяной пак').toUpperCase());
+  const boostText = boost > 1
+    ? `<text x="150" y="352" text-anchor="middle" fill="#c084fc" font-size="11" font-weight="700">МИФИК ×${boost}</text>` : '';
+  return `<svg viewBox="0 0 300 430" class="w-full h-full" style="filter:drop-shadow(0 18px 35px rgba(6,182,212,0.35))">
+    <defs>
+      <linearGradient id="foilBody" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#0e7490"/><stop offset="35%" stop-color="#164e63"/>
+        <stop offset="60%" stop-color="#0b2a33"/><stop offset="100%" stop-color="#020b0e"/>
+      </linearGradient>
+      <linearGradient id="foilTop" x1="0" y1="0" x2="1" y2="0.4">
+        <stop offset="0%" stop-color="#a5f3fc"/><stop offset="45%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#0891b2"/>
+      </linearGradient>
+      <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/><stop offset="50%" stop-color="#ffffff" stop-opacity="0"/>
+      </linearGradient>
+      <radialGradient id="burst" cx="50%" cy="55%" r="55%">
+        <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.55"/><stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+      </radialGradient>
+      <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <ellipse cx="150" cy="230" rx="150" ry="185" fill="url(#burst)"/>
+    <rect x="10" y="46" width="280" height="374" rx="18" fill="url(#foilBody)" stroke="#22d3ee" stroke-opacity="0.5" stroke-width="2"/>
+    <g opacity="0.9">
+      <circle cx="150" cy="205" r="86" fill="none" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="1.5" stroke-dasharray="4 6"/>
+      <circle cx="150" cy="205" r="64" fill="none" stroke="#a5f3fc" stroke-opacity="0.25" stroke-width="1"/>
+      <g filter="url(#softGlow)" fill="#e6fdff">
+        <circle cx="150" cy="205" r="46" fill="#020b0e" fill-opacity="0.55" stroke="#22d3ee" stroke-width="2"/>
+        <rect x="150" y="172" width="7" height="66" rx="3"/>
+        <rect x="120.5" y="201.5" width="66" height="7" rx="3"/>
+        <rect x="150" y="172" width="7" height="66" rx="3" transform="rotate(45 150 205)"/>
+        <rect x="150" y="172" width="7" height="66" rx="3" transform="rotate(-45 150 205)"/>
+      </g>
+    </g>
+    <rect x="10" y="46" width="280" height="374" rx="18" fill="url(#shine)" pointer-events="none"/>
+    <text x="150" y="112" text-anchor="middle" fill="#e6fdff" font-size="21" font-weight="800" font-family="Inter, system-ui, sans-serif" style="text-shadow:0 0 12px rgba(34,211,238,0.8)">${safeName}</text>
+    <text x="150" y="330" text-anchor="middle" fill="#22d3ee" font-size="15" font-weight="700" font-family="Inter, system-ui, sans-serif">❄ ${price}</text>
+    ${boostText}
+    <text x="150" y="398" text-anchor="middle" fill="#67e8f9" fill-opacity="0.6" font-size="9" letter-spacing="3" font-family="Inter, system-ui, sans-serif">TRUEESTIMATION</text>
+    <path d="${d}" fill="url(#foilTop)" stroke="#e6fdff" stroke-opacity="0.6" stroke-width="1.5"/>
+    <path d="M 0 8 L 300 8" stroke="#ffffff" stroke-opacity="0.55" stroke-width="2" stroke-dasharray="10 8"/>
+  </svg>`;
 }
 
-function ecoShowResult(res, cs) {
-  const r = ECO_RARITY[res.card.rarity];
-  const el = eco$('case-result');
-  el.innerHTML = `
-    <div class="text-xs font-extrabold tracking-[0.3em] uppercase mb-2" style="color:${r.color}">${r.label}</div>
-    <div class="w-40 h-56 rounded-2xl border ${res.card.rarity === 'mythic' ? 'mythic-anim border-cyan-200/70' : 'border-white/20'} overflow-hidden mx-auto mb-3 relative" style="box-shadow:0 0 30px ${r.color}55">
-      ${ecoCardImg(res.card, 'w-full h-full')}
-      ${ecoCardRarityBar(res.card.rarity)}
+// Карточка с 3D-переворотом: рубашка (паттерн ❄) → лицо (арт/эмодзи + редкость)
+function packCardHtml(c, small) {
+  const r = ECO_RARITY[c.rarity] || ECO_RARITY.common;
+  const isUrl = c.image_url && String(c.image_url).startsWith('http');
+  const emoji = (String(c.name).match(/\p{Extended_Pictographic}/u) || ['🎵'])[0];
+  const art = isUrl
+    ? `<img src="${escapeHtml(c.image_url)}" class="absolute inset-0 w-full h-full object-cover" draggable="false">`
+    : `<div class="absolute inset-0 flex items-center justify-center text-5xl bg-white/5">${emoji}</div>`;
+  return `<div class="pack-card${small ? ' pack-sm' : ''}" onclick="ecoFlipPackCard(this)">
+    <div class="pack-card-inner">
+      <div class="pack-face pack-back-pattern">
+        <div class="absolute inset-2 rounded-lg border border-cyan-400/25 flex flex-col items-center justify-center gap-1">
+          <span class="text-3xl" style="text-shadow:0 0 10px rgba(34,211,238,0.9)">❄</span>
+          <span class="text-[8px] font-extrabold tracking-[0.25em] text-cyan-200/70">TRUEESTIMATION</span>
+        </div>
+      </div>
+      <div class="pack-face pack-back" style="border:1px solid ${r.color}88;box-shadow:0 0 12px ${r.color}44">
+        ${art}
+        <div class="absolute inset-0" style="background:linear-gradient(to top, rgba(0,0,0,0.85), transparent 60%, rgba(0,0,0,0.3))"></div>
+        <div class="absolute top-0 inset-x-0 h-1" style="background:${r.color}"></div>
+        <div class="absolute bottom-0 inset-x-0 p-1.5">
+          <div class="text-[10px] font-bold text-white leading-tight" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escapeHtml(c.name)}</div>
+          <div class="text-[8px] font-extrabold" style="color:${r.color}">${r.label}</div>
+        </div>
+      </div>
     </div>
-    <div class="text-xl font-extrabold">${escapeHtml(res.card.name)}</div>
-    ${res.duplicate
-      ? `<div class="text-sm text-gray-300 mt-1">Дубликат → +${res.dust} ❆ пыли</div>`
-      : `<div class="text-sm text-cyan-300 mt-1">✨ Новая карточка в коллекции!</div>`}
-    <div class="text-xs text-gray-500 mt-2">Баланс: ${Number(res.balance).toLocaleString('ru-RU')} ❄ · пити: ${res.pity}/10</div>
-    <div class="flex gap-2 mt-4 justify-center">
-      <button onclick="ecoOpenCase(${cs.id})" class="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-6 py-2.5 rounded-xl neon-btn transition-all active:scale-95">Ещё раз · ${cs.price} ❄</button>
-      <button onclick="ecoCloseCase(); changeCategory('Collection')" class="bg-white/10 hover:bg-white/20 px-6 py-2.5 rounded-xl font-bold transition-colors">В коллекцию</button>
-    </div>`;
-  el.classList.remove('hidden'); el.classList.add('flex');
+  </div>`;
+}
+
+// Вибрация на телефоне при эпик+ (опционально)
+function ecoBuzz(pattern) { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {} }
+
+window.ecoFlipPackCard = function(el) {
+  if (packPhase !== 'fan' || el.classList.contains('flipped')) return;
+  if (packFlipTimer) { clearTimeout(packFlipTimer); packFlipTimer = null; }
+  ecoFlipCard(el);
+};
+
+function ecoOpenPackScene(res, cs) {
+  packPhase = 'idle'; packResult = res; packCase = cs;
+  const modal = eco$('case-modal');
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  eco$('pack-hint').innerText = 'Нажми на пак, чтобы вскрыть';
+  const body = eco$('pack-body');
+  body.style.display = 'block';
+  body.className = 'pack-idle';
+  body.innerHTML = packGraphicSvg(cs.name, cs.price, cs.mythic_boost);
+  const light = eco$('pack-light');
+  light.classList.remove('light-burst'); light.style.opacity = '0';
+  const fan = eco$('card-fan');
+  fan.style.opacity = '0'; fan.style.pointerEvents = 'none'; fan.innerHTML = '';
+  eco$('pack-actions').innerHTML = '<button onclick="ecoCloseCase()" class="text-gray-500 hover:text-white text-sm font-bold transition-colors">Закрыть (Esc)</button>';
+  body.onclick = ecoPackClick;
+}
+
+function ecoPackClick() {
+  if (packPhase !== 'idle') return;
+  packPhase = 'zoom';
+  const body = eco$('pack-body');
+  body.classList.remove('pack-idle'); body.classList.add('pack-zoom');
+  eco$('pack-hint').innerText = '';
+  packZoomTimer = setTimeout(() => {
+    packPhase = 'burst';
+    body.classList.remove('pack-zoom'); body.classList.add('pack-burst');
+    const light = eco$('pack-light');
+    light.style.opacity = '1';
+    void light.offsetWidth; // перезапуск CSS-анимации вспышки
+    light.classList.add('light-burst');
+  }, 620);
+  packBurstTimer = setTimeout(() => { body.style.display = 'none'; ecoShowFan(); }, 1150);
+}
+
+function ecoShowFan() {
+  packPhase = 'fan';
+  const fan = eco$('card-fan');
+  fan.innerHTML = packCardHtml(packResult.card, window.innerWidth < 640);
+  fan.style.opacity = '1'; fan.style.pointerEvents = 'auto';
+  const cardEl = fan.querySelector('.pack-card');
+  cardEl.style.opacity = '0';
+  cardEl.style.transform = 'translateY(60px) scale(0.25)';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    cardEl.style.transition = 'transform .6s cubic-bezier(.2,.9,.3,1.2), opacity .4s ease';
+    cardEl.style.transform = 'translateY(0) scale(1)';
+    cardEl.style.opacity = '1';
+  }));
+  // Автопереворот, если пользователь сам не кликнул
+  packFlipTimer = setTimeout(() => {
+    const el = fan.querySelector('.pack-card');
+    if (el && !el.classList.contains('flipped')) ecoFlipCard(el);
+  }, 1750);
+}
+
+function ecoFlipCard(cardEl) {
+  if (!cardEl || cardEl.classList.contains('flipped')) return;
+  cardEl.classList.add('flipped');
+  const rar = packResult.card.rarity;
+  if (rar === 'epic' || rar === 'legendary' || rar === 'mythic') {
+    cardEl.classList.add('card-glow');
+    ecoBuzz(rar === 'mythic' ? [40, 60, 40, 60, 120] : [35]);
+  }
+  setTimeout(ecoShowPackResult, 650);
+}
+
+function ecoShowPackResult() {
+  const res = packResult, cs = packCase;
+  eco$('pack-hint').innerText = res.duplicate ? `Дубликат → +${res.dust} ❆ пыли` : 'Твоё сегодняшнее пополнение ❄';
+  eco$('pack-actions').innerHTML = `
+    <button onclick="ecoOpenCase(${cs.id})" class="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-6 py-2.5 rounded-xl neon-btn transition-all active:scale-95">Ещё пак · ${cs.price} ❄</button>
+    <button onclick="ecoCloseCase(); changeCategory('Collection')" class="bg-white/10 hover:bg-white/20 px-6 py-2.5 rounded-xl font-bold transition-colors">В коллекцию</button>`;
   if (currentCategory === 'Cases') renderCasesView();
 }
 
 window.ecoCloseCase = function() {
-  if (ecoAnimTimer) { clearTimeout(ecoAnimTimer); ecoAnimTimer = null; }
+  [packZoomTimer, packBurstTimer, packFlipTimer].forEach(t => { if (t) clearTimeout(t); });
+  packZoomTimer = packBurstTimer = packFlipTimer = null;
+  packPhase = 'idle'; packResult = null; packCase = null;
   const modal = eco$('case-modal');
   modal?.classList.add('hidden'); modal?.classList.remove('flex');
-  eco$('case-result')?.classList.add('hidden');
-};
-
-window.ecoAdminGrant = async function() {
-  if (!isAdmin) return;
-  const { error } = await supabase.rpc('award_coins', { p_user: currentUserId, p_amount: 1000, p_reason: 'admin_test' });
-  if (error) return showToast('Ошибка: ' + error.message, 'error');
-  showToast('+1000 ❄', 'success');
-  await loadEconomy();
-  renderCasesView();
 };
 
 // ---------- КОЛЛЕКЦИЯ ----------
