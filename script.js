@@ -1,19 +1,19 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+import { SUPABASE_URL, SUPABASE_KEY, MASTER_ADMIN_EMAIL, MEDIA_BUCKET } from './config.js';
 
-const supabaseUrl = 'https://szmwwykgtwdosauounds.supabase.co'; 
-const supabaseKey = 'sb_publishable_0r_O4raj-GlUeg3p8E62TQ_X3gpfZER'; 
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { storageKey: 'tt-auth' } // своя ячейка сессии, не пересекается с пользовательским сайтом
+});
 // пришли по ссылке из письма (подтверждение почты)? запоминаем до очистки адреса
 const _hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
 let cameFromEmailLink = /^(signup|email|magiclink|invite|email_change)$/.test(_hashParams.get('type') || '');
 const emailLinkError = _hashParams.get('error_description');
-const MASTER_ADMIN_EMAIL = 'zahavalgovno777@gmail.com';
 
 const translations = {
     ru: { main: 'Главное', all: 'Все треки', comments: 'Комментарии', admin: 'Админ-панель', playlists: 'Плейлисты', liked: 'Мне понравилось', settings: 'Настройки', logout: 'Выйти', search: 'Поиск...', addTrack: 'Добавить трек', title: 'Название', artist: 'Исполнитель', category: 'Категория', audioUrl: 'Ссылка на аудио', coverUrl: 'Ссылка на обложку', emptyComments: 'Пока нет комментариев. Стань первым!', add: 'Добавить', close: 'Закрыть', newPlaylist: 'Новый плейлист', plName: 'Название плейлиста', cancel: 'Отмена', create: 'Создать' },
     en: { main: 'Home', all: 'All Tracks', comments: 'Comments', admin: 'Admin Panel', playlists: 'Playlists', liked: 'Liked', settings: 'Settings', logout: 'Logout', search: 'Search...', addTrack: 'Add Track', title: 'Title', artist: 'Artist', category: 'Category', audioUrl: 'Audio URL', coverUrl: 'Cover URL', emptyComments: 'No comments yet. Be the first!', add: 'Add', close: 'Close', newPlaylist: 'New Playlist', plName: 'Playlist name', cancel: 'Cancel', create: 'Create' }
 };
-let currentLang = localStorage.getItem('te_lang') || 'ru';
+let currentLang = localStorage.getItem('tt_lang') || 'ru';
 const presetAvatars = ['😎','🔥','🎧','🎵','🚀','👾','🐉','🍕','👑','😈','🤖','🦊','🐼','🦁','🍀','🌙','⚡','💎','🎸','🎹'];
 const presetColors = ['#1e293b', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b', '#10b981', '#000000', '#ffffff'];
 
@@ -287,7 +287,7 @@ window.toggleReportResolved = async function(reportId) {
         .update({ status: resolve ? 'resolved' : 'open', resolved_at: resolve ? new Date().toISOString() : null })
         .eq('id', reportId).select();
     if (error) return showToast('Ошибка: ' + error.message, 'error');
-    if (!data || data.length === 0) return showToast('Нет прав на изменение жалоб. Выполни SQL из файла support_setup.sql в Supabase', 'error');
+    if (!data || data.length === 0) return showToast('Нет прав на изменение жалоб. Выполни SQL из файла setup.sql в Supabase', 'error');
     Object.assign(r, data[0]);
     renderAdminPanel();
     showToast(resolve ? 'Отмечено как решённое' : 'Возвращено в работу', 'success');
@@ -298,7 +298,7 @@ window.deleteReport = function(reportId) {
         const { data, error } = await supabase.from('reports').delete().eq('id', reportId).select();
         if (error) return showToast('Ошибка: ' + error.message, 'error');
         // Без политики DELETE в RLS Supabase молча удаляет 0 строк и не возвращает ошибку
-        if (!data || data.length === 0) return showToast('Не удалено: нет прав (RLS). Выполни SQL из файла support_setup.sql в Supabase', 'error');
+        if (!data || data.length === 0) return showToast('Не удалено: нет прав (RLS). Выполни SQL из файла setup.sql в Supabase', 'error');
         allReportsData = allReportsData.filter(x => String(x.id) !== String(reportId));
         renderAdminPanel();
         showToast('Жалоба удалена', 'success');
@@ -323,7 +323,7 @@ window.saveReportReply = async function() {
     if (resolve) { patch.status = 'resolved'; patch.resolved_at = new Date().toISOString(); }
     const { data, error } = await supabase.from('reports').update(patch).eq('id', replyingReportId).select();
     if (error) return showToast('Ошибка: ' + error.message, 'error');
-    if (!data || data.length === 0) return showToast('Нет прав на изменение. Выполни SQL из файла support_setup.sql', 'error');
+    if (!data || data.length === 0) return showToast('Нет прав на изменение. Выполни SQL из файла setup.sql', 'error');
     const r = allReportsData.find(x => String(x.id) === String(replyingReportId));
     if (r) Object.assign(r, data[0]);
     closeReportReply();
@@ -427,7 +427,7 @@ document.addEventListener('keydown', e => {
 });
 
 // --- ЯЗЫКИ ---
-window.changeLanguage = function(lang) { currentLang = lang; localStorage.setItem('te_lang', lang); applyLanguage(); showToast(lang === 'ru' ? 'Язык изменен' : 'Language changed', 'success'); }
+window.changeLanguage = function(lang) { currentLang = lang; localStorage.setItem('tt_lang', lang); applyLanguage(); showToast(lang === 'ru' ? 'Язык изменен' : 'Language changed', 'success'); }
 function applyLanguage() {
     try {
         const t = translations[currentLang];
@@ -734,15 +734,15 @@ function updateVolumeUI() {
     else { eq.classList.remove('hidden'); muteIcon.classList.add('hidden'); }
 }
 window.changeVolume = function(value) { 
-    value = parseFloat(value); globalAudio.volume = value; if (value > 0) previousVolume = value; localStorage.setItem('te_volume', value); 
+    value = parseFloat(value); globalAudio.volume = value; if (value > 0) previousVolume = value; localStorage.setItem('tt_volume', value); 
     document.getElementById('volume-progress-bar').style.width = `${value * 100}%`; document.getElementById('global-volume-slider').value = value; 
     updateThumbPosition('volume', value); updateVolumeUI();
 }
 window.toggleMute = function() { if (globalAudio.volume > 0) { changeVolume(0); } else { changeVolume(previousVolume || 0.5); } }
-const savedVol = parseFloat(localStorage.getItem('te_volume')); 
+const savedVol = parseFloat(localStorage.getItem('tt_volume')); 
 if (!isNaN(savedVol)) { globalAudio.volume = savedVol; previousVolume = savedVol > 0 ? savedVol : 1; document.getElementById('global-volume-slider').value = savedVol; document.getElementById('volume-progress-bar').style.width = `${savedVol * 100}%`; setTimeout(() => { changeVolume(savedVol); updateVolumeUI(); }, 100); }
-window.addEventListener('beforeunload', () => { if (currentTrackId) { localStorage.setItem('te_trackId', currentTrackId); localStorage.setItem('te_currentTime', globalAudio.currentTime); } });
-globalAudio.addEventListener('pause', () => { if (currentTrackId) { localStorage.setItem('te_trackId', currentTrackId); localStorage.setItem('te_currentTime', globalAudio.currentTime); } updateVolumeUI(); });
+window.addEventListener('beforeunload', () => { if (currentTrackId) { localStorage.setItem('tt_trackId', currentTrackId); localStorage.setItem('tt_currentTime', globalAudio.currentTime); } });
+globalAudio.addEventListener('pause', () => { if (currentTrackId) { localStorage.setItem('tt_trackId', currentTrackId); localStorage.setItem('tt_currentTime', globalAudio.currentTime); } updateVolumeUI(); });
 globalAudio.addEventListener('play', updateVolumeUI);
 
 // --- ОЦЕНКА И КОММЕНТАРИИ ---
@@ -825,7 +825,7 @@ async function loadData() {
             setTimeout(() => { const pl = userPlaylists.find(p => p.id == sharedPlaylistId); if (pl) { showToast(`Загружен плейлист по ссылке`, 'success'); changeCategory(`Playlist_${pl.id}`); } }, 1000);
         }
 
-        const savedTrackId = localStorage.getItem('te_trackId'); const savedTime = parseFloat(localStorage.getItem('te_currentTime'));
+        const savedTrackId = localStorage.getItem('tt_trackId'); const savedTime = parseFloat(localStorage.getItem('tt_currentTime'));
         if (savedTrackId && !currentTrackId) {
             const savedTrack = allTracksData.find(t => t.id == savedTrackId);
             if (savedTrack) {
@@ -1199,7 +1199,7 @@ async function loadNotifications() {
 function subscribeNotifications() {
     if (notifChannel) { supabase.removeChannel(notifChannel); notifChannel = null; }
     if (!currentUserId) return;
-    notifChannel = supabase.channel('notif-' + currentUserId)
+    notifChannel = supabase.channel('tt-notif-' + currentUserId)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${currentUserId}` }, payload => {
             const n = payload.new;
             if (notifications.some(x => x.id === n.id)) return;
@@ -1351,7 +1351,7 @@ function renderHeaderLevel() {
 // Тост при получении новой ачивки (первый запуск молча запоминает уже полученные)
 function checkAchievementUnlocks() {
     if (!currentUserId) return;
-    const key = 'te_ach_' + currentUserId;
+    const key = 'tt_ach_' + currentUserId;
     const earned = getAchievements(currentUserId).filter(a => a.earned);
     let known = null;
     try { known = JSON.parse(localStorage.getItem(key)); } catch (e) {}
@@ -1401,7 +1401,7 @@ async function loadMessages() {
 function subscribeMessages() {
     if (msgChannel) { supabase.removeChannel(msgChannel); msgChannel = null; }
     if (!currentUserId) return;
-    msgChannel = supabase.channel('msg-' + currentUserId)
+    msgChannel = supabase.channel('tt-msg-' + currentUserId)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `recipient_id=eq.${currentUserId}` }, async payload => {
             const m = payload.new;
             if (messagesData.some(x => x.id === m.id)) return;
@@ -1797,7 +1797,6 @@ async function mergePrivateEmails() {
 // ==========================================
 // УПРАВЛЕНИЕ ТРЕКАМИ (добавление файлами, редактирование, удаление)
 // ==========================================
-const MEDIA_BUCKET = 'track-media';
 async function uploadMedia(file, folder, maxMb) {
     if (!file) return null;
     if (file.size > maxMb * 1048576) throw new Error(`Файл «${file.name}» больше ${maxMb} МБ`);
@@ -2050,8 +2049,8 @@ function weeklyTopTrack() {
 }
 
 let listeners = [], presenceChannel = null;
-const hideListening = () => localStorage.getItem('te_hide_listening') === '1';
-window.toggleHideListening = function() { localStorage.setItem('te_hide_listening', hideListening() ? '0' : '1'); announceListening(!globalAudio.paused); renderHomeExtras(); };
+const hideListening = () => localStorage.getItem('tt_hide_listening') === '1';
+window.toggleHideListening = function() { localStorage.setItem('tt_hide_listening', hideListening() ? '0' : '1'); announceListening(!globalAudio.paused); renderHomeExtras(); };
 function announceListening(on) {
     if (!presenceChannel) return;
     try {
@@ -2061,7 +2060,7 @@ function announceListening(on) {
 }
 (function initPresence() {
     try {
-        presenceChannel = supabase.channel('now-listening', { config: { presence: { key: 'v_' + Math.random().toString(36).slice(2, 10) } } });
+        presenceChannel = supabase.channel('tt-now-listening', { config: { presence: { key: 'v_' + Math.random().toString(36).slice(2, 10) } } });
         presenceChannel.on('presence', { event: 'sync' }, () => {
             listeners = Object.values(presenceChannel.presenceState()).map(a => a[a.length - 1]).filter(x => x && x.track_id);
             if (currentCategory === 'Главное меню') renderHomeExtras();
