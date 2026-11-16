@@ -6,8 +6,8 @@
 
 // Supabase-проект ТОЛЬКО для тестового сайта.
 // Должен отличаться от проекта пользовательского сайта!
-export const SUPABASE_URL = 'https://szmwwykgtwdosauounds.supabase.co';
-export const SUPABASE_KEY = 'sb_publishable_0r_O4raj-GlUeg3p8E62TQ_X3gpfZER';
+export const SUPABASE_URL = 'https://tdzinkgzpwmjybfmzaoh.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_LWH3t9UExBL0uQ5s0xuGPg_5O2Z56b-';
 
 // Главный админ тестового сайта (должен совпадать с почтой в is_site_admin() в setup.sql)
 export const MASTER_ADMIN_EMAIL = 'zahavalgovno777@gmail.com';
