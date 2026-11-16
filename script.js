@@ -2252,3 +2252,316 @@ function renderHomeExtras() {
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
+
+// =====================================================================
+// ЭКОНОМИКА: АЙС ❄ / КЕЙСЫ / КАРТОЧКИ / КОЛЛЕКЦИЯ
+// Подключается автоматически (этот блок уже внутри script.js).
+// Зависит от: supabase, currentUserId, isAdmin, allTracksData, showToast,
+// escapeHtml, changeCategory (всё объявлено выше в этом же модуле).
+// =====================================================================
+const ECO_RARITY = {
+  common:    { label: 'Обычная',     color: '#9ca3af' },
+  rare:      { label: 'Редкая',      color: '#60a5fa' },
+  epic:      { label: 'Эпическая',   color: '#c084fc' },
+  legendary: { label: 'Легендарная', color: '#fbbf24' },
+  mythic:    { label: 'МИФИЧЕСКАЯ',  color: '#22d3ee' }
+};
+const ECO_CRAFT_COST = { common: 50, rare: 150, epic: 400, legendary: 1500, mythic: 5000 };
+const ECO_DUST_GAIN  = { common: 5,  rare: 15,   epic: 40,   legendary: 150,  mythic: 500 };
+
+let ecoWallet = { balance: 0, dust: 0, daily_streak: 0, pity_counter: 0, daily_claimed_at: null };
+let ecoCases = [], ecoCards = [], ecoUserCards = [], ecoOpens = [];
+let ecoFilter = 'all', ecoOpening = false, ecoAnimTimer = null, ecoDailyBusy = false;
+
+function eco$(id) { return document.getElementById(id); }
+
+// ---------- ДАННЫЕ ----------
+async function loadEconomy() {
+  try {
+    const [{ data: cases }, { data: cards }] = await Promise.all([
+      supabase.from('cases').select('*').order('price'),
+      supabase.from('cards').select('*').order('id')
+    ]);
+    ecoCases = cases || [];
+    ecoCards = cards || [];
+    if (currentUserId) {
+      const [{ data: w }, { data: uc }, { data: co }] = await Promise.all([
+        supabase.from('wallets').select('*').eq('user_id', currentUserId).maybeSingle(),
+        supabase.from('user_cards').select('*').eq('user_id', currentUserId),
+        supabase.from('case_opens').select('*').eq('user_id', currentUserId).order('created_at', { ascending: false }).limit(20)
+      ]);
+      ecoWallet = w || { balance: 0, dust: 0, daily_streak: 0, pity_counter: 0, daily_claimed_at: null };
+      ecoUserCards = uc || [];
+      ecoOpens = co || [];
+    } else {
+      ecoWallet = { balance: 0, dust: 0, daily_streak: 0, pity_counter: 0, daily_claimed_at: null };
+      ecoUserCards = []; ecoOpens = [];
+    }
+  } catch (e) { console.error('Economy load:', e); }
+  updateCoinsUI();
+}
+
+function updateCoinsUI() {
+  const wrap = eco$('coins-display'), bal = eco$('coins-balance');
+  if (!wrap || !bal) return;
+  if (!currentUserId) { wrap.classList.add('hidden'); wrap.classList.remove('flex'); return; }
+  wrap.classList.remove('hidden'); wrap.classList.add('flex');
+  bal.innerText = Number(ecoWallet.balance || 0).toLocaleString('ru-RU');
+}
+
+async function tryDailyClaim() {
+  if (!currentUserId || ecoDailyBusy) return;
+  const key = 'te_daily_' + currentUserId;
+  if (localStorage.getItem(key) === new Date().toDateString()) return;
+  ecoDailyBusy = true;
+  try {
+    const { data, error } = await supabase.rpc('claim_daily');
+    if (!error && data && data.ok) {
+      localStorage.setItem(key, new Date().toDateString());
+      showToast(`❄ Ежедневный бонус: +${data.reward} (стрик ${data.streak} дн.)`, 'success');
+      await loadEconomy();
+    }
+  } catch (e) {}
+  ecoDailyBusy = false;
+}
+
+// ---------- ВИЗУАЛ КАРТОЧЕК ----------
+function ecoCardImg(c, cls) {
+  const track = c.track_id ? allTracksData.find(t => t.id === c.track_id) : null;
+  const img = c.image_url || (track && track.cover_url);
+  if (img) return `<img src="${escapeHtml(img)}" class="${cls} object-cover" onerror="this.style.display='none'">`;
+  const emoji = (String(c.name).match(/\p{Extended_Pictographic}/u) || ['🎵'])[0];
+  return `<div class="${cls} flex items-center justify-center text-4xl bg-white/5">emoji</div>`.replace('emoji', emoji);
+}
+
+function ecoCardRarityBar(rarity) {
+  return `<div class="absolute bottom-0 inset-x-0 h-1.5" style="background:${ECO_RARITY[rarity].color}"></div>`;
+}
+
+// ---------- КЕЙСЫ ----------
+function renderCasesView() {
+  const el = eco$('cases-inner');
+  if (!el) return;
+  const adminBtn = isAdmin
+    ? `<button onclick="ecoAdminGrant()" class="bg-white/5 hover:bg-white/10 border border-white/10 px-4 py-2 rounded-xl text-xs font-bold text-gray-300 transition-colors">🧪 +1000 ❄ (тест)</button>` : '';
+  const caseEmojis = ['🧊', '🎁', '💠', '🗝️'];
+  el.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-2xl md:text-3xl font-extrabold tracking-tight neon-text">Кейсы</h2>
+      ${adminBtn}
+    </div>
+    <p class="text-xs text-gray-500 mb-6">Открывай кейсы за Айс ❄ и собирай коллекцию карточек.
+      Шансы: мифик 1% · легенда 4% · эпик 10% · редкая 25%. Дубликаты превращаются в пыль ❆, из пыли можно скрафтить недостающее.</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      ${ecoCases.map((cs, i) => {
+        const opens = ecoOpens.filter(o => o.case_id === cs.id).length;
+        return `<div class="ice-card p-6 text-center relative overflow-hidden">
+          <div class="absolute -top-10 -right-10 w-32 h-32 bg-cyan-500/10 rounded-full blur-2xl"></div>
+          <div class="text-6xl mb-3 drop-shadow-[0_0_18px_rgba(34,211,238,0.5)]">${caseEmojis[i % caseEmojis.length]}</div>
+          <h3 class="font-extrabold text-lg neon-text">${escapeHtml(cs.name)}</h3>
+          <div class="text-xs text-gray-400 mt-1">открыто тобой: <b class="text-white">${opens}</b></div>
+          ${cs.mythic_boost > 1
+            ? `<div class="text-[11px] text-purple-300 mt-2">✦ шанс мифики ×${cs.mythic_boost} · пити: <b class="text-white">${ecoWallet.pity_counter}/10</b> (каждое 10-е = эпик+)</div>`
+            : `<div class="text-[11px] text-gray-500 mt-2">стандартные шансы</div>`}
+          <button onclick="ecoOpenCase(${cs.id})" ${ecoOpening ? 'disabled' : ''}
+            class="mt-4 w-full bg-cyan-500 hover:bg-cyan-400 text-black font-bold py-2.5 rounded-xl neon-btn transition-all active:scale-95 ${ecoOpening ? 'opacity-50' : ''}">Открыть · ${cs.price} ❄</button>
+        </div>`;
+      }).join('') || '<p class="text-gray-400 text-sm col-span-2 text-center py-10">Кейсы появятся после запуска economy_setup.sql</p>'}
+    </div>`;
+}
+
+window.ecoOpenCase = async function(caseId) {
+  if (!currentUserId) return showToast('Войди!', 'error');
+  if (guardBan && isBannedSelf()) return;
+  if (ecoOpening) return;
+  const cs = ecoCases.find(x => x.id === caseId);
+  if (!cs) return;
+  if ((ecoWallet.balance || 0) < cs.price) return showToast('Не хватает Айса ❄ — оценивай треки и заходи каждый день', 'error');
+  ecoOpening = true;
+  const { data, error } = await supabase.rpc('open_case', { p_case_id: caseId });
+  ecoOpening = false;
+  if (error) {
+    const m = error.message || '';
+    return showToast(m.includes('not_enough_coins') ? 'Не хватает Айса ❄'
+      : m.includes('banned') ? 'Аккаунт заблокирован' : 'Ошибка: ' + m, 'error');
+  }
+  await loadEconomy();
+  ecoAnimate(data, cs);
+};
+
+function ecoRollPreview() {
+  const x = Math.random() * 100;
+  const rar = x < 1 ? 'mythic' : x < 5 ? 'legendary' : x < 15 ? 'epic' : x < 40 ? 'rare' : 'common';
+  const pool = ecoCards.filter(c => c.rarity === rar);
+  const src = pool.length ? pool : ecoCards;
+  return src[Math.floor(Math.random() * src.length)];
+}
+
+function ecoAnimate(res, cs) {
+  const modal = eco$('case-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  const strip = eco$('case-strip'), resultEl = eco$('case-result');
+  resultEl.classList.add('hidden'); resultEl.classList.remove('flex');
+  strip.style.transition = 'none'; strip.style.transform = 'translateX(0px)';
+
+  const winIdx = 35, total = 42;
+  let html = '';
+  for (let i = 0; i < total; i++) {
+    const c = i === winIdx ? res.card : ecoRollPreview();
+    const r = ECO_RARITY[c.rarity];
+    html += `<div class="case-tile rounded-xl border ${c.rarity === 'mythic' ? 'mythic-anim border-cyan-200/70' : 'border-white/15'} bg-white/5 overflow-hidden relative flex-shrink-0">
+      ${ecoCardImg(c, 'w-full h-full')}
+      <div class="absolute top-1 left-1 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-black/70" style="color:${r.color}">${r.label}</div>
+      ${ecoCardRarityBar(c.rarity)}
+    </div>`;
+  }
+  strip.innerHTML = html;
+  const win = strip.children[winIdx];
+  const offset = win.offsetLeft + win.offsetWidth / 2 - strip.parentElement.clientWidth / 2;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    strip.style.transition = 'transform 4.6s cubic-bezier(0.16, 0.84, 0.24, 1)';
+    strip.style.transform = `translateX(${-offset}px)`;
+  }));
+  if (ecoAnimTimer) clearTimeout(ecoAnimTimer);
+  ecoAnimTimer = setTimeout(() => ecoShowResult(res, cs), 4800);
+}
+
+function ecoShowResult(res, cs) {
+  const r = ECO_RARITY[res.card.rarity];
+  const el = eco$('case-result');
+  el.innerHTML = `
+    <div class="text-xs font-extrabold tracking-[0.3em] uppercase mb-2" style="color:${r.color}">${r.label}</div>
+    <div class="w-40 h-56 rounded-2xl border ${res.card.rarity === 'mythic' ? 'mythic-anim border-cyan-200/70' : 'border-white/20'} overflow-hidden mx-auto mb-3 relative" style="box-shadow:0 0 30px ${r.color}55">
+      ${ecoCardImg(res.card, 'w-full h-full')}
+      ${ecoCardRarityBar(res.card.rarity)}
+    </div>
+    <div class="text-xl font-extrabold">${escapeHtml(res.card.name)}</div>
+    ${res.duplicate
+      ? `<div class="text-sm text-gray-300 mt-1">Дубликат → +${res.dust} ❆ пыли</div>`
+      : `<div class="text-sm text-cyan-300 mt-1">✨ Новая карточка в коллекции!</div>`}
+    <div class="text-xs text-gray-500 mt-2">Баланс: ${Number(res.balance).toLocaleString('ru-RU')} ❄ · пити: ${res.pity}/10</div>
+    <div class="flex gap-2 mt-4 justify-center">
+      <button onclick="ecoOpenCase(${cs.id})" class="bg-cyan-500 hover:bg-cyan-400 text-black font-bold px-6 py-2.5 rounded-xl neon-btn transition-all active:scale-95">Ещё раз · ${cs.price} ❄</button>
+      <button onclick="ecoCloseCase(); changeCategory('Collection')" class="bg-white/10 hover:bg-white/20 px-6 py-2.5 rounded-xl font-bold transition-colors">В коллекцию</button>
+    </div>`;
+  el.classList.remove('hidden'); el.classList.add('flex');
+  if (currentCategory === 'Cases') renderCasesView();
+}
+
+window.ecoCloseCase = function() {
+  if (ecoAnimTimer) { clearTimeout(ecoAnimTimer); ecoAnimTimer = null; }
+  const modal = eco$('case-modal');
+  modal?.classList.add('hidden'); modal?.classList.remove('flex');
+  eco$('case-result')?.classList.add('hidden');
+};
+
+window.ecoAdminGrant = async function() {
+  if (!isAdmin) return;
+  const { error } = await supabase.rpc('award_coins', { p_user: currentUserId, p_amount: 1000, p_reason: 'admin_test' });
+  if (error) return showToast('Ошибка: ' + error.message, 'error');
+  showToast('+1000 ❄', 'success');
+  await loadEconomy();
+  renderCasesView();
+};
+
+// ---------- КОЛЛЕКЦИЯ ----------
+window.ecoSetFilter = function(f) { ecoFilter = f; renderCollectionView(); };
+
+function renderCollectionView() {
+  const el = eco$('collection-inner');
+  if (!el) return;
+  const mine = new Map(ecoUserCards.map(x => [x.card_id, x.count]));
+  const owned = ecoCards.filter(c => mine.has(c.id)).length;
+  const byRar = r => ecoCards.filter(c => c.rarity === r);
+  const ownedRar = r => byRar(r).filter(c => mine.has(c.id)).length;
+
+  const filterBtn = (key, label) => `<button onclick="ecoSetFilter('${key}')"
+    class="seg-btn ${ecoFilter === key ? 'active' : ''}">${label}</button>`;
+
+  const list = ecoCards.filter(c => ecoFilter === 'all' || c.rarity === ecoFilter);
+  el.innerHTML = `
+    <div class="flex flex-wrap items-end justify-between gap-4 mb-4">
+      <div>
+        <h2 class="text-2xl md:text-3xl font-extrabold tracking-tight neon-text">Коллекция</h2>
+        <p class="text-xs text-gray-400 mt-1">Собрано <b class="text-cyan-300">${owned} / ${ecoCards.length}</b> · пыль ❆: <b class="text-purple-300">${Number(ecoWallet.dust || 0).toLocaleString('ru-RU')}</b></p>
+      </div>
+      <div class="flex gap-1.5 flex-wrap">
+        ${filterBtn('all', `Все ${owned}/${ecoCards.length}`)}
+        ${Object.keys(ECO_RARITY).map(r => filterBtn(r, `<span style="color:${ECO_RARITY[r].color}">${ECO_RARITY[r].label}</span> ${ownedRar(r)}/${byRar(r).length}`)).join('')}
+      </div>
+    </div>
+    <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+      ${list.map(c => {
+        const r = ECO_RARITY[c.rarity]; const n = mine.get(c.id);
+        const craftCost = ECO_CRAFT_COST[c.rarity];
+        const canCraft = !n && (ecoWallet.dust || 0) >= craftCost;
+        return `<div class="rounded-2xl border ${n ? 'border-white/15' : 'border-dashed border-white/10 opacity-80'} bg-white/5 p-2 text-center flex flex-col">
+          <div class="relative rounded-xl overflow-hidden" style="box-shadow:${n ? `0 0 12px ${r.color}33` : 'none'}">
+            ${n
+              ? `${ecoCardImg(c, 'w-full aspect-[3/4]')}${ecoCardRarityBar(c.rarity)}`
+              : `<div class="w-full aspect-[3/4] bg-black/50 flex items-center justify-center text-3xl text-gray-600 font-black">?</div>`}
+          </div>
+          <div class="mt-1.5 text-[11px] font-bold truncate ${n ? 'text-white' : 'text-gray-500'}">${n ? escapeHtml(c.name) : '???'}</div>
+          <div class="text-[9px] font-extrabold" style="color:${r.color}">${r.label}</div>
+          ${n
+            ? `<div class="text-[9px] text-gray-400">×${n}</div>`
+            : `<button ${canCraft ? '' : 'disabled'} onclick="ecoCraft(${c.id})" title="Сколько дают за дубликат: ${ECO_DUST_GAIN[c.rarity]} ❆"
+                class="mt-1 text-[10px] font-bold px-2 py-1 rounded-lg transition-colors ${canCraft ? 'bg-purple-500/20 text-purple-300 hover:bg-purple-500 hover:text-white' : 'bg-white/5 text-gray-600 cursor-not-allowed'}">Крафт ${craftCost} ❆</button>`}
+        </div>`;
+      }).join('') || '<p class="text-gray-400 text-sm col-span-6 text-center py-10">Карточки появятся после запуска economy_setup.sql</p>'}
+    </div>`;
+}
+
+window.ecoCraft = async function(cardId) {
+  if (!currentUserId) return showToast('Войди!', 'error');
+  const { data, error } = await supabase.rpc('craft_card', { p_card_id: cardId });
+  if (error) {
+    const m = error.message || '';
+    return showToast(m.includes('not_enough_dust') ? 'Не хватает пыли ❆ (дубликаты = пыль)' : 'Ошибка: ' + m, 'error');
+  }
+  showToast('Создано! ✨', 'success');
+  await loadEconomy();
+  renderCollectionView();
+};
+
+// ---------- ПОДКЛЮЧЕНИЕ К СУЩЕСТВУЮЩЕМУ КОДУ ----------
+// Оборачиваем loadData: после любой загрузки данных подтягиваем кошелёк
+const _ecoLoadData = loadData;
+loadData = async function() { await _ecoLoadData(); await loadEconomy(); };
+
+// Оборачиваем updateProfileUI: обновляем ❄ в шапке и пробуем ежедневный бонус
+const _ecoUpdateProfileUI = updateProfileUI;
+updateProfileUI = async function() { await _ecoUpdateProfileUI(); updateCoinsUI(); if (currentUserId) tryDailyClaim(); };
+
+// Оборачиваем renderView: наши экраны Cases / Collection
+const _ecoRenderView = renderView;
+renderView = function() {
+  _ecoRenderView();
+  const isCases = currentCategory === 'Cases';
+  const isColl = currentCategory === 'Collection';
+  eco$('cases-view-container')?.classList.toggle('hidden', !isCases);
+  eco$('collection-view-container')?.classList.toggle('hidden', !isColl);
+  if (isCases) renderCasesView();
+  if (isColl) renderCollectionView();
+  if (isCases || isColl) {
+    ['hero-container', 'home-extras', 'list-view-container', 'comments-view-container',
+     'admin-view-container', 'top-view-container', 'ranking-view-container', 'news-view-container']
+      .forEach(id => document.getElementById(id)?.classList.add('hidden'));
+  }
+};
+
+// Оборачиваем renderCategories: подсветка активных пунктов меню
+const _ecoRenderCategories = renderCategories;
+renderCategories = function() {
+  _ecoRenderCategories();
+  const navCls = active => 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-colors text-left ' +
+    (active ? 'bg-white/10 text-white neon-text' : 'text-gray-300 hover:text-white hover:bg-white/10');
+  eco$('nav-cases')?.setAttribute('class', navCls(currentCategory === 'Cases'));
+  eco$('nav-collection')?.setAttribute('class', navCls(currentCategory === 'Collection'));
+};
+
+// Esc закрывает кейс
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') ecoCloseCase();
+});
